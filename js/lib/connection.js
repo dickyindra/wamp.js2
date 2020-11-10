@@ -58,10 +58,7 @@ export class Connection {
         }
 
         // maximum number of reconnection attempts
-        self._max_retries =
-            self._options.max_retries !== undefined
-                ? self._options.max_retries
-                : 15;
+        self._max_retries = self._options.max_retries !== undefined ? self._options.max_retries : 15;
 
         // initial retry delay in seconds
         self._initial_retry_delay = self._options.initial_retry_delay || 1.0;
@@ -104,11 +101,13 @@ export class Connection {
         self._timeout_timer = null;
 
         // maximum connection attempt when timeout
-        self._max_connection_attempt =
-            self._options.max_connection_attempt || 5;
+        self._max_connection_attempt = self._options.max_connection_attempt || null;
 
         // current number of connection attempt
         self._connection_attempt_count = 0;
+
+        // time seconds between reconnect to websocket server
+        self._retry_connection_delay = self._options.retry_connection_delay || 5000;
     }
 
     // Deferred factory
@@ -141,7 +140,13 @@ export class Connection {
         if (this._transport) {
             return this._transport;
         } else {
-            return { info: { type: "none", url: null, protocol: null } };
+            return {
+                info: {
+                    type: "none",
+                    url: null,
+                    protocol: null,
+                },
+            };
         }
     }
 
@@ -160,13 +165,9 @@ export class Connection {
             transport_options = self._options.transports[i];
 
             try {
-                transport_factory_klass = configs.transports.get(
-                    transport_options.type
-                );
+                transport_factory_klass = configs.transports.get(transport_options.type);
                 if (transport_factory_klass) {
-                    transport_factory = new transport_factory_klass(
-                        transport_options
-                    );
+                    transport_factory = new transport_factory_klass(transport_options);
                     self._transport_factories.push(transport_factory);
                 }
             } catch (exc) {
@@ -180,26 +181,16 @@ export class Connection {
 
         for (var i = 0; i < self._transport_factories.length; ++i) {
             var transport_factory = self._transport_factories[i];
-            log.debug(
-                "trying to create WAMP transport of type: " +
-                    transport_factory.type
-            );
+            log.debug("trying to create WAMP transport of type: " + transport_factory.type);
             try {
                 var transport = transport_factory.create();
                 if (transport) {
-                    log.debug(
-                        "using WAMP transport type: " + transport_factory.type
-                    );
+                    log.debug("using WAMP transport type: " + transport_factory.type);
                     return transport;
                 }
             } catch (e) {
                 // ignore
-                log.debug(
-                    "could not create WAMP transport '" +
-                        transport_factory.type +
-                        "': " +
-                        e
-                );
+                log.debug("could not create WAMP transport '" + transport_factory.type + "': " + e);
             }
         }
 
@@ -225,10 +216,7 @@ export class Connection {
     _autoreconnect_advance() {
         // jitter retry delay
         if (this._retry_delay_jitter) {
-            this._retry_delay = util.rand_normal(
-                this._retry_delay,
-                this._retry_delay * this._retry_delay_jitter
-            );
+            this._retry_delay = util.rand_normal(this._retry_delay, this._retry_delay * this._retry_delay_jitter);
         }
 
         // cap the retry delay
@@ -240,10 +228,7 @@ export class Connection {
         this._retry_count += 1;
 
         var res;
-        if (
-            this._retry &&
-            (this._max_retries === -1 || this._retry_count <= this._max_retries)
-        ) {
+        if (this._retry && (this._max_retries === -1 || this._retry_count <= this._max_retries)) {
             res = {
                 count: this._retry_count,
                 delay: this._retry_delay,
@@ -319,11 +304,7 @@ export class Connection {
         }
 
         // create a new WAMP session using the WebSocket connection as transport
-        self._session = new Session(
-            self._transport,
-            self._defer,
-            self._options.onchallenge
-        );
+        self._session = new Session(self._transport, self._defer, self._options.onchallenge);
         self._session_close_reason = null;
         self._session_close_message = null;
 
@@ -336,8 +317,13 @@ export class Connection {
 
             self._change_status(STATUS.DISCONNECTED);
 
-            if (self._connection_attempt_count < self._max_connection_attempt) {
-                self._do_retry();
+            if (
+                !self._max_connection_attempt ||
+                (self._max_connection_attempt && self._connection_attempt_count < self._max_connection_attempt)
+            ) {
+                setTimeout(() => {
+                    self._do_retry();
+                }, self._retry_connection_delay);
             }
 
             self._connection_attempt_count++;
@@ -358,11 +344,7 @@ export class Connection {
             self._connect_successes += 1;
 
             // start WAMP session
-            self._session.join(
-                self._options.realm,
-                self._options.authmethods,
-                self._options.authid
-            );
+            self._session.join(self._options.realm, self._options.authmethods, self._options.authid);
         };
 
         self._session.onjoin = function (details) {
@@ -376,10 +358,7 @@ export class Connection {
                     self.onopen(self._session, details);
                 }
             } catch (e) {
-                log.debug(
-                    "Exception raised from app code while firing Connection.onopen()",
-                    e
-                );
+                log.debug("Exception raised from app code while firing Connection.onopen()", e);
             }
         };
 
@@ -434,10 +413,7 @@ export class Connection {
                 var stop_retrying;
                 if (details.will_retry) {
                     // emit status
-                    stop_retrying = self._change_status(
-                        STATUS.DISCONNECTED,
-                        details
-                    );
+                    stop_retrying = self._change_status(STATUS.DISCONNECTED, details);
                 } else {
                     // emit status
                     self._change_status(STATUS.CLOSED, details);
@@ -449,10 +425,7 @@ export class Connection {
                     stop_retrying = self.onclose(details.close_reason, details);
                 }
             } catch (e) {
-                log.debug(
-                    "Exception raised from app code while firing Connection.onclose()",
-                    e
-                );
+                log.debug("Exception raised from app code while firing Connection.onclose()", e);
             }
 
             // reset session info
@@ -472,10 +445,7 @@ export class Connection {
                         self._is_retrying = true;
 
                         log.debug("retrying in " + next_retry.delay + " s");
-                        self._retry_timer = setTimeout(
-                            ::self._do_retry,
-                            next_retry.delay * 1000
-                        );
+                        self._retry_timer = setTimeout(::self._do_retry, next_retry.delay * 1000);
                     } else {
                         log.debug("giving up trying to reconnect");
                         if (self.status !== STATUS.CLOSED) {
