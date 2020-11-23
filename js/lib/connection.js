@@ -310,7 +310,10 @@ export class Connection {
 
         self._timeout_timer = setTimeout(() => {
             self._retry = false;
-            self._transport.close(1000);
+
+            if (self._transport) {
+                self._transport.close(1000);
+            }
 
             clearTimeout(self._timeout_timer);
             self._timeout_timer = null;
@@ -330,8 +333,10 @@ export class Connection {
         }, self._timeout);
 
         self._transport.onopen = function () {
-            clearTimeout(self._timeout_timer);
-            self._timeout_timer = null;
+            if (self._timeout_timer) {
+                clearTimeout(self._timeout_timer);
+                self._timeout_timer = null;
+            }
 
             self._connection_attempt_count = 0;
 
@@ -370,6 +375,11 @@ export class Connection {
         };
 
         self._transport.onclose = function (evt) {
+            if (self._timeout_timer) {
+                clearTimeout(self._timeout_timer);
+                self._timeout_timer = null;
+            }
+
             log.debug("onclose:", evt);
             if (this !== self._transport) {
                 // already tried reconnect.
